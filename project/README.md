@@ -2,7 +2,7 @@
 
 ## Overview
 
-This project implements a secure transport layer on top of a reliable TCP connection. The security layer handles a TLS-like handshake between a client and server, and then encrypts all subsequent data using AES-256-CBC with HMAC-SHA256 for integrity. Everything is built around TLV (Type-Length-Value) encoded messages.
+This project implements a secure transport layer on top of a reliable TCP connection. The security layer handles a TLS-like handshake between a client and server, and then encrypts all subsequent data using AES-256-CBC with HMAC-SHA256 for integrity. Everything is built around TLV encoded messages.
 
 The only file we edited was `security.c`. All crypto primatives and networking code was provided.
 
@@ -12,7 +12,7 @@ The security layer is implemented as a state machine with two main functions:
 - `input_sec` handles outgoing messages (sending data out to the network)
 - `output_sec` handles incoming messages (receiving data from the network)
 
-Both the client and server share the same code, they just start in different states.
+Both the client and server share the same code they just start in different states
 
 ### Handshake
 
@@ -28,10 +28,9 @@ The handshake is a 1-RTT exchange:
 After the handshake, all messages are encrypted. Each DATA message contains an IV (random 16 bytes), a MAC (HMAC-SHA256 over the serialized IV and ciphertext TLVs), and the AES-256-CBC ciphertext. On the recieving end, the MAC is verified before decryption to ensure integrity.
 
 ## Implementation Details
-
 ### Global State
 
-We store `client_nonce` and `server_nonce` as global arrays so they persist across state transitions. This is needed because the nonces are generated in one state but used for key derivation in a later state.
+We store `client_nonce` and `server_nonce` as global arrays so they persist across state transitions. This is needed because the nonces are generated in one state but used for key derivation in a later state
 
 ### init_sec
 
@@ -49,7 +48,7 @@ The server parses the client hello, validates the protocol version, stores the c
 
 ### Server Hello Send (input_sec)
 
-This is where it gets a bit tricky. The server needs to sign the handshake transcript with its identity key, but it also needs its ephemeral key for key derivation. So we save the ephemeral key with `get_private_key()`, load the identity key from `server_key.bin`, sign the transcript, then restore the ephemeral key with `set_private_key()`.
+This is where it gets a bit tricky. The server needs to sign the handshake transcript with its identity key, but it also needs its ephemeral key for key derivation. So we save the ephemeral key with `get_private_key()`, load the identity key from `server_key.bin`, sign the transcript, then restore the ephemeral key with `set_private_key()`. Piazza was very helpful for this!
 
 The transcript that gets signed is: serialized(client_hello) + serialized(server_nonce_tlv) + serialized(server_pubkey_tlv).
 
@@ -77,12 +76,12 @@ The `inc_mac` flag intentionally corrupts the MAC for testing purposes.
 ### Helper Functions
 
 - `read_be_uint`: parses big-endian byte sequences into uint64 values
-- `parse_lifetime_window`: decodes the 16-byte LIFETIME TLV into not_before/not_after timestamps
+- `parse_lifetime_window`: decodes the 16-byte LIFETIME TLV into not_before/not_after timestamps (crucial)
 - `enforce_lifetime_valid`: checks if current time falls within the certificate's validity window
 
 ## Challenges
 
-The trickiest part was getting the handshake signature right -- making sure the transcript was constructed in exactly the same order on both sides. Also had to be careful about when to load which public key (identity vs ephemeral) on the client side during verification.
+The hardest part/most challenging obstacle was getting the handshake signature right. Particularly, making sure the transcript was constructed in exactly the same order on both sides. We also had to be careful about when to load which public key (identity vs ephemeral) on the client side during verification.
 
 ## Testing
 
