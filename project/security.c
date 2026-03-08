@@ -230,7 +230,6 @@ ssize_t input_sec(uint8_t *out_buf, size_t out_cap)
         add_tlv(server_hello, cert_tlv);
         add_tlv(server_hello, pk_tlv);
         add_tlv(server_hello, sig_tlv);
-
         uint16_t len = serialize_tlv(out_buf, server_hello);
 
         // derive secret key
@@ -276,7 +275,12 @@ ssize_t input_sec(uint8_t *out_buf, size_t out_cap)
         // compute hmac over iv_tlv + ct_tlv (need to serialize)
         uint8_t mac_data[5000];
         uint16_t mac_data_len = 0;
-        mac_data_len += serialize_tlv(mac_data + mac_data_len, iv_tlv);
+        ""
+        "
+            mac_data_len += serialize_tlv(mac_data + mac_data_len, iv_tlv);
+        ""
+        "
+            mac_data_len += serialize_tlv(mac_data + mac_data_len, iv_tlv);
         mac_data_len += serialize_tlv(mac_data + mac_data_len, ct_tlv);
 
         uint8_t mac_buf[MAC_SIZE];
@@ -429,9 +433,7 @@ void output_sec(uint8_t *in_buf, size_t in_len)
 
         // load the servers ephemeral key for the ECDH secret
         load_peer_public_key(srv_eph_pk->val, srv_eph_pk->length);
-
         derive_secret();
-
         uint8_t salt[NONCE_SIZE * 2];
         memcpy(salt, client_nonce, NONCE_SIZE);
         memcpy(salt + NONCE_SIZE, server_nonce, NONCE_SIZE);
