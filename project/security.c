@@ -456,7 +456,7 @@ void output_sec(uint8_t *in_buf, size_t in_len)
         if (iv_tlv == NULL || mac_tlv == NULL || ct_tlv == NULL)
             exit(6);
 
-        // recompute the mac over serialized(iv_tlv) + serialized(ct_tlv)
+        // recompute the mac over iv_tlv + ct_tlv (need to serialize)
         uint8_t mac_data[5000];
         uint16_t mac_data_len = 0;
         mac_data_len += serialize_tlv(mac_data + mac_data_len, iv_tlv);
@@ -465,7 +465,7 @@ void output_sec(uint8_t *in_buf, size_t in_len)
         uint8_t computed_mac[MAC_SIZE];
         hmac(computed_mac, mac_data, mac_data_len);
 
-        // compare -- if mismatch the message was tampered with
+        // compare : if there is a mismatch the message was tampered with
         if (memcmp(computed_mac, mac_tlv->val, MAC_SIZE) != 0)
             exit(5);
 
