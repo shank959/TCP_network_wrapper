@@ -116,13 +116,11 @@ ssize_t input_sec(uint8_t* out_buf, size_t out_cap) {
         // generate server nonce
         generate_nonce(server_nonce, NONCE_SIZE);
 
-        // -- build server hello children --
-
         // 1) nonce tlv
         tlv* nonce_tlv = create_tlv(NONCE);
         add_val(nonce_tlv, server_nonce, NONCE_SIZE);
 
-        // 2) certificate tlv -- deserialize the raw cert bytes loaded in init_sec
+        // 2) certificate tlv, deserialize the raw cert bytes loaded in init_sec
         tlv* cert_tlv = deserialize_tlv(certificate, cert_size);
 
         // 3) ephemeral public key tlv
@@ -130,7 +128,7 @@ ssize_t input_sec(uint8_t* out_buf, size_t out_cap) {
         add_val(pk_tlv, public_key, pub_key_size);
 
         // 4) handshake signature
-        // the transcript to sign is: serialize(client_hello) + serialize(nonce_tlv) + serialize(pk_tlv)
+        // the transcript to sign is: serialize(client_hello) + serialize(nonce_tlv) + serialize(pk_tlv) (on readmE)
         uint8_t transcript[2000];
         uint16_t offset = 0;
         offset += serialize_tlv(transcript + offset, client_hello);
@@ -156,7 +154,6 @@ ssize_t input_sec(uint8_t* out_buf, size_t out_cap) {
         add_tlv(server_hello, cert_tlv);
         add_tlv(server_hello, pk_tlv);
         add_tlv(server_hello, sig_tlv);
-
         uint16_t len = serialize_tlv(out_buf, server_hello);
 
         // derive session keys -- peer pubkey was loaded when we received the client hello
@@ -174,7 +171,8 @@ ssize_t input_sec(uint8_t* out_buf, size_t out_cap) {
         // read plaintext from stdin
         uint8_t plain[5000];
         ssize_t plain_len = input_io(plain, sizeof(plain));
-        if (plain_len <= 0) return 0;
+        if (plain_len <= 0) 
+            return 0;
 
         // encrypt the plaintext
         uint8_t iv_buf[IV_SIZE];
@@ -191,13 +189,16 @@ ssize_t input_sec(uint8_t* out_buf, size_t out_cap) {
         // compute hmac over serialized(iv_tlv) + serialized(ct_tlv)
         uint8_t mac_data[5000];
         uint16_t mac_data_len = 0;
+        """
+        mac_data_len += serialize_tlv(mac_data + mac_data_len, iv_tlv);
+        """
         mac_data_len += serialize_tlv(mac_data + mac_data_len, iv_tlv);
         mac_data_len += serialize_tlv(mac_data + mac_data_len, ct_tlv);
 
         uint8_t mac_buf[MAC_SIZE];
         hmac(mac_buf, mac_data, mac_data_len);
 
-        // for testing bad mac -- intentionally corrupt
+        // for testing bad mac ; intentionally corrupt
         if (inc_mac) {
             mac_buf[0] ^= 0xFF;
         }
@@ -227,17 +228,20 @@ void output_sec(uint8_t* in_buf, size_t in_len) {
 
         // deserialize the incoming client hello
         client_hello = deserialize_tlv(in_buf, in_len);
-        if (client_hello == NULL) exit(6);
+        if (client_hello == NULL) 
+            exit(6);
 
         // extract required children
         tlv* version = get_tlv(client_hello, VERSION_TAG);
         tlv* nonce = get_tlv(client_hello, NONCE);
         tlv* pk = get_tlv(client_hello, PUBLIC_KEY);
 
-        if (version == NULL || nonce == NULL || pk == NULL) exit(6);
+        if (version == NULL || nonce == NULL || pk == NULL) 
+            exit(6); // short circuit eval ma3ybe?
 
         // check protocol version
-        if (version->val[0] != PROTOCOL_VERSION) exit(6);
+        if (version->val[0] != PROTOCOL_VERSION) 
+            exit(6);
 
         // store the client nonce for key derivation later
         memcpy(client_nonce, nonce->val, NONCE_SIZE);
@@ -253,20 +257,21 @@ void output_sec(uint8_t* in_buf, size_t in_len) {
 
         // deserialize the server hello
         server_hello = deserialize_tlv(in_buf, in_len);
-        if (server_hello == NULL) exit(6);
+        if (server_hello == NULL) 
+            exit(6);
 
-        // --- extract all the pieces we need ---
+        // extracz
         tlv* srv_nonce = get_tlv(server_hello, NONCE);
         tlv* cert = get_tlv(server_hello, CERTIFICATE);
         tlv* srv_eph_pk = get_tlv(server_hello, PUBLIC_KEY);
         tlv* hs_sig = get_tlv(server_hello, HANDSHAKE_SIGNATURE);
+        if (srv_nonce == NULL || cert == NULL || srv_eph_pk == NULL || hs_sig == NULL) 
+            exit(6);
 
-        if (srv_nonce == NULL || cert == NULL || srv_eph_pk == NULL || hs_sig == NULL) exit(6);
-
-        // store server nonce
+        // store server noncee
         memcpy(server_nonce, srv_nonce->val, NONCE_SIZE);
 
-        // --- certificate verification ---
+        // cert verif !TODO shan take a look to see if properly implemented
         tlv* dns = get_tlv(cert, DNS_NAME);
         tlv* cert_pk = get_tlv(cert, PUBLIC_KEY);
         tlv* lifetime = get_tlv(cert, LIFETIME);
@@ -275,24 +280,23 @@ void output_sec(uint8_t* in_buf, size_t in_len) {
         if (dns == NULL || cert_pk == NULL || lifetime == NULL || cert_sig == NULL) exit(6);
 
         // 1) verify the CA's signature on the certificate
-        //    the cert signature covers: serialize(dns) + serialize(cert_pk) + serialize(lifetime)
+        //  the cert signature covers: serialize(dns) + serialize(cert_pk) + serialize(lifetime) (CHECK SPEC)
         uint8_t cert_verify_buf[1000];
         uint16_t cert_offset = 0;
         cert_offset += serialize_tlv(cert_verify_buf + cert_offset, dns);
         cert_offset += serialize_tlv(cert_verify_buf + cert_offset, cert_pk);
         cert_offset += serialize_tlv(cert_verify_buf + cert_offset, lifetime);
 
-        int cert_valid = verify(cert_sig->val, cert_sig->length,
-                                cert_verify_buf, cert_offset, ec_ca_public_key);
+        int cert_valid = verify(cert_sig->val, cert_sig->length, cert_verify_buf, cert_offset, ec_ca_public_key);
         if (cert_valid != 1) exit(1);
 
         // 2) check certificate lifetime
         enforce_lifetime_valid(lifetime);
 
-        // 3) check that the dns name matches the hostname we connected to
+        // 3) check that the dns name matches the hostname we cconnect??
         if (strcmp((char*)dns->val, hostname) != 0) exit(2);
 
-        // --- handshake signature verification ---
+        // handshakeroni
 
         // load the server's identity public key (from the cert) to verify the handshake sig
         load_peer_public_key(cert_pk->val, cert_pk->length);
@@ -304,17 +308,15 @@ void output_sec(uint8_t* in_buf, size_t in_len) {
         t_offset += serialize_tlv(transcript + t_offset, srv_nonce);
         t_offset += serialize_tlv(transcript + t_offset, srv_eph_pk);
 
-        int hs_valid = verify(hs_sig->val, hs_sig->length,
-                              transcript, t_offset, ec_peer_public_key);
-        if (hs_valid != 1) exit(3);
+        int hs_valid = verify(hs_sig -> val, hs_sig -> length, transcript, t_offset, ec_peer_public_key);
+        if (hs_valid != 1) 
+            exit(3);
 
-        // --- key derivation ---
+        // key deriv
 
         // now load the server's EPHEMERAL public key for the ECDH secret
         load_peer_public_key(srv_eph_pk->val, srv_eph_pk->length);
-
         derive_secret();
-
         uint8_t salt[NONCE_SIZE * 2];
         memcpy(salt, client_nonce, NONCE_SIZE);
         memcpy(salt + NONCE_SIZE, server_nonce, NONCE_SIZE);
@@ -343,7 +345,8 @@ void output_sec(uint8_t* in_buf, size_t in_len) {
         uint8_t computed_mac[MAC_SIZE];
         hmac(computed_mac, mac_data, mac_data_len);
 
-        // compare -- if mismatch the message was tampered with
+        // tamperment checking // !TODO AYAAN CHECK IF CORRECTLY IMPLEMENTED
+        """ if (memcmp(computed_mac, val, MAC_SIZE) != 0) exit(3); """
         if (memcmp(computed_mac, mac_tlv->val, MAC_SIZE) != 0) exit(5);
 
         // decrypt and output the plaintext
