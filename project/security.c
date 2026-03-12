@@ -10,6 +10,7 @@
 
 int state_sec = 0;
 char *hostname = NULL;
+//keep this heare in case we want a separate identity/private key handle later
 EVP_PKEY *priv_key = NULL;
 tlv *client_hello = NULL;
 tlv *server_hello = NULL;
@@ -23,13 +24,10 @@ uint8_t server_nonce[NONCE_SIZE];
 
 static uint64_t read_be_uint(const uint8_t *bytes, size_t nbytes)
 {
-    ""
-    "parses a big endian byte sequence into a uint64"
-    ""
         // TODO: parse an unsigned integer from a big-endian byte sequence.
         // Hint: this is used for certificate lifetime fields.
 
-        uint64_t result = 0;
+    //uint64_t result = 0;
     // size_t i = 0;
     // while (i < nbytes) {
     //     uint64_t shift_amount = (nbytes-1-i) * 8;
@@ -37,18 +35,24 @@ static uint64_t read_be_uint(const uint8_t *bytes, size_t nbytes)
     //     i++;
     // }
     // loop thruogh bytes and shift left by 8 bits
-    for (size_t i = 0; i < nbytes; i++)
+    //for (size_t i = 0; i < nbytes; i++)
+    //{
+        //result = (result << 8) | bytes[i];
+    //}
+    //return result;
+
+    uint64_t value = 0;
+
+    while( nbytes-- > 0)
     {
-        result = (result << 8) | bytes[i];
+        value = (value << 8) | *bytes++;
     }
-    return result;
+
+    return value;
 }
 
 static bool parse_lifetime_window(const tlv *life, uint64_t *start_ts, uint64_t *end_ts)
 {
-    ""
-    "parses the lifetime tlv value into not_before and not_after timestamps (lifetime value is 16bytes)"
-    ""
 
         // TODO: decode [not_before || not_after] from CERTIFICATE/LIFETIME.
         // Return false on malformed input (NULL pointers, wrong length, invalid range).
@@ -64,7 +68,7 @@ static bool parse_lifetime_window(const tlv *life, uint64_t *start_ts, uint64_t 
         // }
 
         // check if this ltv logic still works
-        if (life == NULL || start_ts == NULL || end_ts == NULL)
+    if (life == NULL || start_ts == NULL || end_ts == NULL)
     {
         return false;
     }
@@ -76,37 +80,60 @@ static bool parse_lifetime_window(const tlv *life, uint64_t *start_ts, uint64_t 
     *start_ts = read_be_uint(life->val, 8);
     *end_ts = read_be_uint(life->val + 8, 8);
 
-    if (*end_ts < *start_ts)
-    {
-        return false; // return false if anything is malformed
-    }
-    return true;
+    return *end_ts >= *start_ts;
 }
 
 static void enforce_lifetime_valid(const tlv *life)
 {
-    ""
-    "checks if the cert lifetime is valid right now
-        exit(6) if the lifetime tlv is malformed
-            exit(1) if the cert is invalid
-        ""
-        "
 
-        // TODO: enforce lifetime validity against current time.
-        // Exit with code 1 for invalid/expired cert, code 6 for malformed time inputs.
+    // TODO: enforce lifetime validity against current time.
+    // Exit with code 1 for invalid/expired cert, code 6 for malformed time inputs.
 
-        uint64_t start_ts,
-        end_ts;
-    // use readme exit codes where appropriate
-    if (!parse_lifetime_window(life, &start_ts, &end_ts))
+    uint64_t start_ts = 0;
+    uint64_t end_ts = 0;
+    uint64_t now = 0;
+
+    if(!parse_lifetime_window(life, &start_ts, &end_ts))
     {
-        exit(6); // malformed lifetime tlv
+        exit(6);
     }
-    uint64_t now = (uint64_t)time(NULL);
-    if (now < start_ts || now > end_ts)
+
+    now = (uint64_t)time(NULL);
+
+    if(now < start_ts || now > end_ts)
     {
-        exit(1); // cert expired/invalid
+        exit(1);
     }
+}
+
+//MORE HELPER FUNCTIONS
+//helper to buid the handshake transcript used for signing/verifying. Both client and server must contruct transcript in same order
+static uint16_t build_handshake_transcript(uint8_t *buf, tlv *hello_tlv, tlv *nonce_tlv, tlv *pk_tlv)
+{
+    uint16_t len = 0;
+    len += serialize_tlv(buf + len, hello_tlv);
+    len += serialize_tlv(buf + len, nonce_tlv);
+    len += serialize_tlv(buf + len, pk_tlv);
+    return len;
+}
+
+//After the ECDH shared secret is derived, both sides use two nonces
+//as salt input to HKDF to derive the symmetric encription keys
+static void derive_session_keys_from_nonces(void)
+{
+    uint8_t salt[NONCE_SIZE * 2];
+    memcpy(salt, client_nonce, NONCE_SIZE);
+    memcpy(salt + NONCE_SIZE, server_nonce, NONCE_SIZE);
+    derive_keys(salt, sizeof(salt));
+}
+
+//Helps rebiuld exact byte sequence
+static uint16_t serialize_mac_parts(uint8_t *buf, tlv *iv_tlv, tlv *ct_tlv)
+{
+    uint16_t len = 0;
+    len += serialize_tlv(buf +len, iv_tlv);
+    len += serialize_tlv(buf +len, ct_tlv);
+    return len;
 }
 
 void init_sec(int initial_state, char *peer_host, bool bad_mac)
@@ -208,16 +235,13 @@ ssize_t input_sec(uint8_t *out_buf, size_t out_cap)
         // memcpy(transcript + len1 + len2, part3, len3);
         // offset = len1 + len2 + len3;
         uint8_t transcript[2000];
-        uint16_t offset = 0;
-        offset += serialize_tlv(transcript + offset, client_hello);
-        offset += serialize_tlv(transcript + offset, nonce_tlv);
-        offset += serialize_tlv(transcript + offset, pk_tlv);
+        uint16_t transcript_len = build_handshake_transcript(transcript, client_hello, nonce_tlv, pk_tlv);
 
         // temporarily switch to the servers identity key to sign
         EVP_PKEY *eph_key = get_private_key();
         load_private_key("server_key.bin");
         uint8_t sig_buf[256];
-        size_t sig_len = sign(sig_buf, transcript, offset);
+        size_t sig_len = sign(sig_buf, transcript, transcript_len);
 
         // restore temp key for ECDH
         set_private_key(eph_key);
@@ -240,10 +264,7 @@ ssize_t input_sec(uint8_t *out_buf, size_t out_cap)
         // for (size_t i = 0; i < NONCE_SIZE; i++) salt[i] = client_nonce[i];
         // for (size_t i = 0; i < NONCE_SIZE; i++) salt[NONCE_SIZE + i] = server_nonce[i];
         // derive_keys(salt, sizeof(salt));
-        uint8_t salt[NONCE_SIZE * 2];
-        memcpy(salt, client_nonce, NONCE_SIZE);
-        memcpy(salt + NONCE_SIZE, server_nonce, NONCE_SIZE);
-        derive_keys(salt, sizeof(salt));
+        derive_session_keys_from_nonces();
 
         state_sec = DATA_STATE;
         return (ssize_t)len;
@@ -274,14 +295,7 @@ ssize_t input_sec(uint8_t *out_buf, size_t out_cap)
 
         // compute hmac over iv_tlv + ct_tlv (need to serialize)
         uint8_t mac_data[5000];
-        uint16_t mac_data_len = 0;
-        ""
-        "
-            mac_data_len += serialize_tlv(mac_data + mac_data_len, iv_tlv);
-        ""
-        "
-            mac_data_len += serialize_tlv(mac_data + mac_data_len, iv_tlv);
-        mac_data_len += serialize_tlv(mac_data + mac_data_len, ct_tlv);
+        uint16_t mac_data_len = serialize_mac_parts(mac_data, iv_tlv, ct_tlv);
 
         uint8_t mac_buf[MAC_SIZE];
         hmac(mac_buf, mac_data, mac_data_len);
@@ -418,12 +432,9 @@ void output_sec(uint8_t *in_buf, size_t in_len)
 
         // rebuild the transcript: client_hello + srv_nonce + srv_eph_pk (need to serialize)
         uint8_t transcript[2000];
-        uint16_t t_offset = 0;
-        t_offset += serialize_tlv(transcript + t_offset, client_hello);
-        t_offset += serialize_tlv(transcript + t_offset, srv_nonce);
-        t_offset += serialize_tlv(transcript + t_offset, srv_eph_pk);
+        uint16_t transcript_len = build_handshake_transcript(transcript, client_hello, srv_nonce, srv_eph_pk);
 
-        int hs_valid = verify(hs_sig->val, hs_sig->length, transcript, t_offset, ec_peer_public_key); // todo fix
+        int hs_valid = verify(hs_sig->val, hs_sig->length, transcript, transcript_len, ec_peer_public_key); // todo fix
         if (hs_valid != 1)
         {
             exit(3);
@@ -434,10 +445,7 @@ void output_sec(uint8_t *in_buf, size_t in_len)
         // load the servers ephemeral key for the ECDH secret
         load_peer_public_key(srv_eph_pk->val, srv_eph_pk->length);
         derive_secret();
-        uint8_t salt[NONCE_SIZE * 2];
-        memcpy(salt, client_nonce, NONCE_SIZE);
-        memcpy(salt + NONCE_SIZE, server_nonce, NONCE_SIZE);
-        derive_keys(salt, sizeof(salt));
+        derive_session_keys_from_nonces();
 
         state_sec = DATA_STATE;
         break;
@@ -458,9 +466,7 @@ void output_sec(uint8_t *in_buf, size_t in_len)
 
         // recompute the mac over iv_tlv + ct_tlv (need to serialize)
         uint8_t mac_data[5000];
-        uint16_t mac_data_len = 0;
-        mac_data_len += serialize_tlv(mac_data + mac_data_len, iv_tlv);
-        mac_data_len += serialize_tlv(mac_data + mac_data_len, ct_tlv);
+        uint16_t mac_data_len = serialize_mac_parts(mac_data, iv_tlv, ct_tlv);
 
         uint8_t computed_mac[MAC_SIZE];
         hmac(computed_mac, mac_data, mac_data_len);
